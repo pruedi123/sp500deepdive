@@ -798,3 +798,5 @@ def convert_df_to_excel(formatted_df, original_df):
         file_name='metrics_summary.xlsx',
         mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
+
+st.write("Data used is from the Robert Shiller Data website: https://shillerdata.com/ and the file used is ie_data.xls"
