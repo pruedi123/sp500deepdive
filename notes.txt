@@ -1,0 +1,2 @@
+Increased by {increase_percent:.1f}%
+
