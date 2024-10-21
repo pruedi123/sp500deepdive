@@ -102,7 +102,7 @@ st.sidebar.header("Configuration")
 # Load your local Excel file directly
 @st.cache_data
 def load_data(file_path):
-    df = pd.read_excel(file_path)
+    df = pd.read_excel(file_path, engine='openpyxl')  # Explicitly specify engine
     # Normalize column names by stripping spaces and converting to lowercase
     df.columns = df.columns.str.strip().str.lower()
     # Ensure 'date fraction' column is of type float
@@ -143,15 +143,11 @@ end_date_default = last_good_date
 end_year_default = end_date_default.year
 end_month_default = f"{end_date_default.month:02d}"  # September
 
-# Add a dropdown with predefined date ranges, including up to "Last 100 Years"
+# Add a dropdown with predefined date ranges
 date_options = [
-    'Custom Period',
-    'Last 1 Year', 'Last 2 Years', 'Last 3 Years', 'Last 4 Years',
-    'Last 5 Years', 'Last 10 Years', 'Last 15 Years', 'Last 20 Years',
-    'Last 25 Years', 'Last 30 Years', 'Last 35 Years', 'Last 40 Years',
-    'Last 50 Years', 'Last 60 Years', 'Last 70 Years', 'Last 80 Years',
-    'Last 90 Years', 'Last 100 Years',
-    'Since WWII'
+    'Custom Period', 'Last 1 Year', 'Last 2 Years', 'Last 3 Years', 'Last 4 Years',
+    'Last 5 Years', 'Last 10 Years', 'Last 15 Years', 'Last 20 Years', 'Last 25 Years',
+    'Last 30 Years', 'Last 35 Years', 'Last 40 Years', 'Since WWII'
 ]
 selected_range = st.sidebar.selectbox('Select Time Period', date_options, index=0)  # Default to 'Custom Period'
 
@@ -196,19 +192,54 @@ begin_total_return_value = st.sidebar.slider(
 decimal_places = 2
 
 # Determine begin and end dates based on the selection
-if selected_range.startswith('Last') and selected_range.endswith('Years'):
-    try:
-        # Extract the number of years from the selected option
-        n_years = int(selected_range.split()[1])
-        # Calculate the begin date
-        begin_date_obj = end_date_obj = end_date_default  # Initialize end_date_obj
-        begin_date_obj = end_date_obj - relativedelta(years=n_years) + relativedelta(months=1)
-    except (IndexError, ValueError):
-        st.error("Invalid selection for the number of years.")
-        st.stop()
-elif selected_range == 'Since WWII':
-    begin_date_obj = datetime(1945, 10, 1)  # Start from October 1945
-elif selected_range == 'Custom Period':
+if selected_range != 'Custom Period':
+    # Fixed end date
+    end_date_obj = end_date_default
+
+    # Determine the begin date based on the selection
+    if selected_range == 'Last 1 Year':
+        begin_date_obj = end_date_obj - relativedelta(years=1) + relativedelta(months=1)
+    elif selected_range == 'Last 2 Years':
+        begin_date_obj = end_date_obj - relativedelta(years=2) + relativedelta(months=1)
+    elif selected_range == 'Last 3 Years':
+        begin_date_obj = end_date_obj - relativedelta(years=3) + relativedelta(months=1)
+    elif selected_range == 'Last 4 Years':
+        begin_date_obj = end_date_obj - relativedelta(years=4) + relativedelta(months=1)
+    elif selected_range == 'Last 5 Years':
+        begin_date_obj = end_date_obj - relativedelta(years=5) + relativedelta(months=1)
+    elif selected_range == 'Last 10 Years':
+        begin_date_obj = end_date_obj - relativedelta(years=10) + relativedelta(months=1)
+    elif selected_range == 'Last 15 Years':
+        begin_date_obj = end_date_obj - relativedelta(years=15) + relativedelta(months=1)
+    elif selected_range == 'Last 20 Years':
+        begin_date_obj = end_date_obj - relativedelta(years=20) + relativedelta(months=1)
+    elif selected_range == 'Last 25 Years':
+        begin_date_obj = end_date_obj - relativedelta(years=25) + relativedelta(months=1)
+    elif selected_range == 'Last 30 Years':
+        begin_date_obj = end_date_obj - relativedelta(years=30) + relativedelta(months=1)
+    elif selected_range == 'Last 35 Years':
+        begin_date_obj = end_date_obj - relativedelta(years=35) + relativedelta(months=1)
+    elif selected_range == 'Last 40 Years':
+        begin_date_obj = end_date_obj - relativedelta(years=40) + relativedelta(months=1)
+    elif selected_range == 'Since WWII':
+        begin_date_obj = datetime(1945, 10, 1)  # Start from October 1945
+
+    # Extract begin_year and begin_month from begin_date_obj
+    begin_year = begin_date_obj.year
+    begin_month = f"{begin_date_obj.month:02d}"  # Ensure two-digit month
+    begin_month_name = [name for name, num in month_mapping.items() if num == begin_month][0]
+
+    # Set end_year and end_month_name
+    end_year = end_date_obj.year
+    end_month = f"{end_date_obj.month:02d}"
+    end_month_name = [name for name, num in month_mapping.items() if num == end_month][0]
+
+    # Display the calculated dates in the sidebar
+    st.sidebar.write(f"**Begin Date:** {begin_month_name.capitalize()} {begin_year}")
+    st.sidebar.write(f"**End Date:** {end_month_name.capitalize()} {end_year}")
+
+else:
+    # Custom Period: Use the values from the widgets
     # Convert month names to the numeric format
     begin_month = month_mapping[begin_month_name]
     end_month = month_mapping[end_month_name]
@@ -231,23 +262,15 @@ elif selected_range == 'Custom Period':
     except ValueError:
         st.error("Invalid ending date selected.")
         st.stop()
-else:
-    st.error("Invalid time period selected.")
-    st.stop()
 
-if selected_range.startswith('Last') and selected_range.endswith('Years'):
-    # Display the calculated dates in the sidebar
-    st.sidebar.write(f"**Begin Date:** {begin_date_obj.strftime('%B %Y')}")
-    st.sidebar.write(f"**End Date:** {end_date_default.strftime('%B %Y')}")
-elif selected_range == 'Since WWII':
-    st.sidebar.write(f"**Begin Date:** {begin_date_obj.strftime('%B %Y')}")
-    st.sidebar.write(f"**End Date:** {end_date_default.strftime('%B %Y')}")
-elif selected_range == 'Custom Period':
-    # Calculate the period in years and months
-    adjusted_end_date = end_date_obj + relativedelta(months=1)
-    period = relativedelta(adjusted_end_date, begin_date_obj)
-    # Display the period
-    st.write(f"**Period:** Beginning {begin_date_obj.strftime('%B %Y')} and Ending {end_date_obj.strftime('%B %Y')} - {period.years} years and {period.months} months")
+# Adjust the end date for period calculation
+adjusted_end_date = end_date_obj + relativedelta(months=1)
+
+# Calculate the period in years and months using the adjusted end date
+period = relativedelta(adjusted_end_date, begin_date_obj)
+
+# Display the period using the correct end date
+st.write(f"**Period:** Beginning {begin_month_name.capitalize()} {begin_year} and Ending {end_month_name.capitalize()} {end_year} - {period.years} years and {period.months} months")
 
 # Filter data between begin_date and end_date, including both
 df_filtered = df[(df['date'] >= begin_date_obj) & (df['date'] <= end_date_obj)]
@@ -280,15 +303,7 @@ if missing_columns:
     st.stop()
 
 # Calculate the number of years for CAGR
-if selected_range.startswith('Last') and selected_range.endswith('Years'):
-    years_cagr = n_years + 0  # Assuming full years; adjust if partial months are needed
-elif selected_range == 'Since WWII':
-    period = relativedelta(end_date_default, begin_date_obj)
-    years_cagr = period.years + period.months / 12.0
-elif selected_range == 'Custom Period':
-    period = relativedelta(end_date_obj + relativedelta(months=1), begin_date_obj)
-    years_cagr = period.years + period.months / 12.0
-
+years_cagr = period.years + period.months / 12.0
 if years_cagr <= 0:
     st.error("The selected period is too short to calculate CAGR.")
     st.stop()
@@ -527,8 +542,8 @@ nominal_metrics = [
     ('Nominal Earnings', 'nominal earnings'),
     ('Nominal Dividends', 'nominal dividends'),
     ('Composite Price Only', 'composite price only'),
-    ('Total Return', 'total return'),
-    ('CPI', 'cpi')
+    ('CPI', 'cpi'),                # 'CPI' moved above 'Total Return'
+    ('Total Return', 'total return')  # 'Total Return' moved below 'CPI'
 ]
 
 real_metrics = [
@@ -657,7 +672,7 @@ for index, row in metrics_df.iterrows():
         if metric_name in ['Total Return', 'Real Total Return']:
             # No decimals, currency formatting
             formatted_begin_value = format_value_no_cagr(begin_value, is_currency)
-            formatted_end_value = format_value_no_cagr(end_value, is_currency)
+            formatted_end_value = format_value_no_cagr(end_val := end_val if 'end_val' in locals() else end_val, is_currency)
         else:
             # Two decimals
             formatted_begin_value = f"{begin_value:,.2f}"
