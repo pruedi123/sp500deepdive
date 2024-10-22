@@ -147,7 +147,8 @@ end_month_default = f"{end_date_default.month:02d}"  # September
 date_options = [
     'Custom Period', 'Last 1 Year', 'Last 2 Years', 'Last 3 Years', 'Last 4 Years',
     'Last 5 Years', 'Last 10 Years', 'Last 15 Years', 'Last 20 Years', 'Last 25 Years',
-    'Last 30 Years', 'Last 35 Years', 'Last 40 Years', 'Since WWII'
+    'Last 30 Years', 'Last 35 Years', 'Last 40 Years', 'Last 50 Years', 'Last 60 Years',
+    'Last 70 Years', 'Last 80 Years', 'Last 90 Years', 'Last 100 Years', 'Since WWII'
 ]
 selected_range = st.sidebar.selectbox('Select Time Period', date_options, index=0)  # Default to 'Custom Period'
 
@@ -197,32 +198,20 @@ if selected_range != 'Custom Period':
     end_date_obj = end_date_default
 
     # Determine the begin date based on the selection
-    if selected_range == 'Last 1 Year':
-        begin_date_obj = end_date_obj - relativedelta(years=1) + relativedelta(months=1)
-    elif selected_range == 'Last 2 Years':
-        begin_date_obj = end_date_obj - relativedelta(years=2) + relativedelta(months=1)
-    elif selected_range == 'Last 3 Years':
-        begin_date_obj = end_date_obj - relativedelta(years=3) + relativedelta(months=1)
-    elif selected_range == 'Last 4 Years':
-        begin_date_obj = end_date_obj - relativedelta(years=4) + relativedelta(months=1)
-    elif selected_range == 'Last 5 Years':
-        begin_date_obj = end_date_obj - relativedelta(years=5) + relativedelta(months=1)
-    elif selected_range == 'Last 10 Years':
-        begin_date_obj = end_date_obj - relativedelta(years=10) + relativedelta(months=1)
-    elif selected_range == 'Last 15 Years':
-        begin_date_obj = end_date_obj - relativedelta(years=15) + relativedelta(months=1)
-    elif selected_range == 'Last 20 Years':
-        begin_date_obj = end_date_obj - relativedelta(years=20) + relativedelta(months=1)
-    elif selected_range == 'Last 25 Years':
-        begin_date_obj = end_date_obj - relativedelta(years=25) + relativedelta(months=1)
-    elif selected_range == 'Last 30 Years':
-        begin_date_obj = end_date_obj - relativedelta(years=30) + relativedelta(months=1)
-    elif selected_range == 'Last 35 Years':
-        begin_date_obj = end_date_obj - relativedelta(years=35) + relativedelta(months=1)
-    elif selected_range == 'Last 40 Years':
-        begin_date_obj = end_date_obj - relativedelta(years=40) + relativedelta(months=1)
+    if selected_range.startswith('Last') and selected_range.endswith('Years'):
+        try:
+            # Extract the number of years from the selected option
+            n_years = int(selected_range.split()[1])
+            # Calculate the begin date
+            begin_date_obj = end_date_obj - relativedelta(years=n_years) + relativedelta(months=1)
+        except (IndexError, ValueError):
+            st.error("Invalid selection for the number of years.")
+            st.stop()
     elif selected_range == 'Since WWII':
         begin_date_obj = datetime(1945, 10, 1)  # Start from October 1945
+    else:
+        st.error("Invalid time period selected.")
+        st.stop()
 
     # Extract begin_year and begin_month from begin_date_obj
     begin_year = begin_date_obj.year
@@ -797,4 +786,6 @@ def convert_df_to_excel(formatted_df, original_df):
         data=excel_data,
         file_name='metrics_summary.xlsx',
         mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    )st.write("Data used is from the Robert Shiller Data website: https://shillerdata.com/ and the file used is ie_data.xls")
+    )
+    
+    st.write("Data used is from the Robert Shiller Data website: https://shillerdata.com/ and the file used is ie_data.xls")
