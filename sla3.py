@@ -1,11 +1,10 @@
 import pandas as pd
-import numpy as np  # For numerical operations
+import numpy as np
 import streamlit as st
 import plotly.graph_objs as go
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
-from io import BytesIO  # For creating in-memory Excel files
-
+from io import BytesIO
 
 # -----------------------------
 # Helper Functions
@@ -14,26 +13,17 @@ from io import BytesIO  # For creating in-memory Excel files
 def date_fraction_to_datetime(date_fraction):
     """
     Converts a date fraction to a datetime object.
+    Example: 2020.5 -> 2020-06-01
     """
-    # Extract the year
     year = int(date_fraction)
-
-    # Calculate the fractional part representing the month
     fractional_part = date_fraction - year
-
-    # Calculate the month (ensure correct rounding)
     month = int(round(fractional_part * 12 + 0.5))
-
-    # Adjust month and year if necessary
     if month > 12:
         month -= 12
         year += 1
     elif month < 1:
         month = 1
-
-    # Create the datetime object
-    date_obj = datetime(year, month, 1)
-    return date_obj
+    return datetime(year, month, 1)
 
 def calculate_cagr(start_value, end_value, years):
     """
@@ -56,7 +46,11 @@ def display_kpis(label, begin_value, end_value, factor, is_currency=True, decima
         formatted_begin_value = f"{begin_value:,.{decimals_begin_end}f}"
         formatted_end_value = f"{end_value:,.{decimals_begin_end}f}"
 
-    formatted_factor = f"{factor:,.2f}"  # Always two decimal places for factor increase
+    # Format Factor Increase
+    if factor is not None:
+        formatted_factor = f"{factor:,.2f}"
+    else:
+        formatted_factor = "N/A"
 
     # Create three columns
     col1, col2, col3 = st.columns(3)
@@ -90,29 +84,154 @@ def create_plot(df, x_col, y_col, title, color, is_currency, decimal_places, yax
     )
     return fig
 
+def parse_bear_market_period(period_str):
+    """
+    Parses a period string like 'May 29, 1946 - October 9, 1946' into start and end datetime objects.
+    """
+    try:
+        start_str, end_str = period_str.split(' - ')
+        start_date = datetime.strptime(start_str.strip(), '%B %d, %Y')
+        end_date = datetime.strptime(end_str.strip(), '%B %d, %Y')
+        return pd.Series({'start_date': start_date, 'end_date': end_date})
+    except Exception as e:
+        st.error(f"Error parsing bear market period '{period_str}': {e}")
+        return pd.Series({'start_date': pd.NaT, 'end_date': pd.NaT})
+
+@st.cache_data
+def load_data(file_path):
+    """
+    Loads the main data from an Excel file.
+    """
+    try:
+        df = pd.read_excel(file_path, engine='openpyxl')  # Explicitly specify engine
+        # Normalize column names by stripping spaces and converting to lowercase
+        df.columns = df.columns.str.strip().str.lower()
+        # Ensure 'date fraction' column is of type float
+        df['date fraction'] = df['date fraction'].astype(float)
+        # Convert 'date fraction' to 'date' using the corrected function
+        df['date'] = df['date fraction'].apply(date_fraction_to_datetime)
+        return df
+    except FileNotFoundError:
+        st.error(f"The file '{file_path}' was not found.")
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error loading data from '{file_path}': {e}")
+        return pd.DataFrame()
+
+@st.cache_data
+def load_bear_market_data(file_path):
+    """
+    Loads and processes bear market data from an Excel file.
+    """
+    try:
+        df = pd.read_excel(file_path, engine='openpyxl')
+
+        # Normalize column names to lowercase and strip any whitespace
+        df.columns = df.columns.str.strip().str.lower()
+
+
+        # Check for 'bear market period' column after normalization
+        if 'bear market period' not in df.columns:
+            st.error("The 'Bear Market Period' column is missing from the bear market data.")
+            return pd.DataFrame()
+
+        # Parse the 'bear market period' into 'start_date' and 'end_date'
+        parsed_dates = df['bear market period'].apply(parse_bear_market_period)
+        df = pd.concat([df, parsed_dates], axis=1)
+
+        # Drop rows with invalid dates
+        df.dropna(subset=['start_date', 'end_date'], inplace=True)
+
+        # Ensure necessary columns exist
+        required_bear_columns = ['peak value', 'trough value', 'percentage decline', 'duration (days)']
+        missing_bear_columns = [col for col in required_bear_columns if col not in df.columns]
+        if missing_bear_columns:
+            st.error(f"The following required columns are missing from the bear market data: {', '.join(missing_bear_columns)}")
+            return pd.DataFrame()
+
+        # Ensure 'percentage decline' is numeric
+        if df['percentage decline'].dtype == object:
+            df['percentage decline'] = df['percentage decline'].apply(
+                lambda x: float(x.strip('%')) if isinstance(x, str) and x.endswith('%') else x
+            )
+
+        # Check if 'percentage decline' values are in decimal form (e.g., 0.49 for 49%)
+        # If the max absolute value is less than 1, assume decimal form and scale
+        if df['percentage decline'].abs().max() < 1:
+            df['percentage decline'] = df['percentage decline'] * 100
+
+        return df
+    except FileNotFoundError:
+        st.error(f"The file '{file_path}' was not found.")
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error loading bear market data: {e}")
+        return pd.DataFrame()
+
+def count_bear_markets(bear_market_df, begin_date, end_date):
+    """
+    Counts the number of bear markets that start within the given date range.
+    Includes bear markets that start exactly on the begin_date or end_date.
+    """
+    count = bear_market_df[
+        (bear_market_df['start_date'] >= begin_date) &
+        (bear_market_df['start_date'] <= end_date)
+    ].shape[0]
+    return count
+
+def calculate_aggregate_bear_market_metrics(bear_market_metrics_df):
+    """
+    Calculates aggregate metrics from the bear market metrics DataFrame.
+    Returns a dictionary with Worst Decline, Average Decline, Longest Duration, and Average Duration.
+    """
+    if bear_market_metrics_df.empty:
+        return {
+            'Worst Decline Overall (%)': None,
+            'Average Decline Overall (%)': None,
+            'Longest Duration (Days)': None,
+            'Average Duration (Days)': None
+        }
+
+    # Determine if declines are stored as negative or positive
+    if bear_market_metrics_df['percentage decline'].min() < 0:
+        # Declines are negative
+        worst_decline_overall = bear_market_metrics_df['percentage decline'].min()
+    else:
+        # Declines are positive
+        worst_decline_overall = bear_market_metrics_df['percentage decline'].max()
+
+    # Calculate the average decline
+    average_decline_overall = bear_market_metrics_df['percentage decline'].mean()
+
+    # Calculate duration metrics
+    longest_duration = bear_market_metrics_df['duration (days)'].max()
+    average_duration = bear_market_metrics_df['duration (days)'].mean()
+
+    return {
+        'Worst Decline Overall (%)': worst_decline_overall,
+        'Average Decline Overall (%)': average_decline_overall,
+        'Longest Duration (Days)': longest_duration,
+        'Average Duration (Days)': average_duration
+    }
+
 # -----------------------------
 # Streamlit App Configuration
 # -----------------------------
 
 # Title for the Streamlit app
-st.title("Standard and Poor's 500 Index Data")
+st.title("Standard and Poor's 500 Index Analysis")
 
 # Sidebar Configuration
 st.sidebar.header("Configuration")
 
-# Load your local Excel file directly
-@st.cache_data
-def load_data(file_path):
-    df = pd.read_excel(file_path, engine='openpyxl')  # Explicitly specify engine
-    # Normalize column names by stripping spaces and converting to lowercase
-    df.columns = df.columns.str.strip().str.lower()
-    # Ensure 'date fraction' column is of type float
-    df['date fraction'] = df['date fraction'].astype(float)
-    # Convert 'date fraction' to 'date' using the corrected function
-    df['date'] = df['date fraction'].apply(date_fraction_to_datetime)
-    return df
-
+# Load your local Excel files
 df = load_data('data.xlsx')
+bear_market_df = load_bear_market_data('bear_market_periods.xlsx')
+
+# Verify that bear_market_df is not empty
+if bear_market_df.empty:
+    st.error("Bear market data could not be loaded. Please check the 'bear_market_periods.xlsx' file.")
+    st.stop()
 
 # Define the last valid date based on the availability of data
 last_good_date = datetime(2024, 9, 30)  # Set the last usable date to September 30, 2024
@@ -179,22 +298,7 @@ if selected_range == 'Custom Period':
         end_year_index = -1  # Default to the last available year
     end_year = st.sidebar.selectbox('Select the ending year', options=years, index=end_year_index)
     end_month_name = st.sidebar.selectbox('Select the ending month', options=month_names, index=8)  # September is at index 8
-
-# Slider for beginning value for Total Return Including Dividends
-begin_total_return_value = st.sidebar.slider(
-    "Select Beginning Value for Total Return Including Dividends",
-    min_value=10000,
-    max_value=1000000,
-    value=100000,
-    step=10000
-)
-
-# Removed the decimal slider
-# Set a fixed number of decimal places
-decimal_places = 2
-
-# Determine begin and end dates based on the selection
-if selected_range != 'Custom Period':
+else:
     # Fixed end date
     end_date_obj = end_date_default
 
@@ -228,18 +332,31 @@ if selected_range != 'Custom Period':
     st.sidebar.write(f"**Begin Date:** {begin_month_name.capitalize()} {begin_year}")
     st.sidebar.write(f"**End Date:** {end_month_name.capitalize()} {end_year}")
 
+# Slider for beginning value for Total Return Including Dividends
+begin_total_return_value = st.sidebar.slider(
+    "Select Beginning Value for Total Return Including Dividends",
+    min_value=10000,
+    max_value=1000000,
+    value=10000,
+    step=10000
+)
+
+# Set a fixed number of decimal places
+decimal_places = 2
+
+# Determine begin and end dates based on the selection
+if selected_range != 'Custom Period':
+    # Display the period using the correct end date
+    period = relativedelta(end_date_obj + relativedelta(months=1), begin_date_obj)
+    st.write(f"**Period:** Beginning {begin_month_name.capitalize()} {begin_year} and Ending {end_month_name.capitalize()} {end_year} - {period.years} years and {period.months} months")
+
+    # Filter data between begin_date and end_date, including both
+    df_filtered = df[(df['date'] >= begin_date_obj) & (df['date'] <= end_date_obj)]
 else:
     # Custom Period: Use the values from the widgets
     # Convert month names to the numeric format
     begin_month = month_mapping[begin_month_name]
     end_month = month_mapping[end_month_name]
-
-    # Ensure that end date does not go beyond September 30, 2024
-    if int(end_year) > end_year_default or (int(end_year) == end_year_default and int(end_month) > int(end_month_default)):
-        st.warning(f"The last usable date is September 30, 2024. Adjusting end date to September 30, 2024.")
-        end_year = end_year_default
-        end_month = end_month_default
-        end_month_name = 'september'
 
     # Create datetime objects for begin and end dates
     try:
@@ -253,17 +370,17 @@ else:
         st.error("Invalid ending date selected.")
         st.stop()
 
-# Adjust the end date for period calculation
-adjusted_end_date = end_date_obj + relativedelta(months=1)
+    # Adjust the end date for period calculation
+    adjusted_end_date = end_date_obj + relativedelta(months=1)
 
-# Calculate the period in years and months using the adjusted end date
-period = relativedelta(adjusted_end_date, begin_date_obj)
+    # Calculate the period in years and months using the adjusted end date
+    period = relativedelta(adjusted_end_date, begin_date_obj)
 
-# Display the period using the correct end date
-st.write(f"**Period:** Beginning {begin_month_name.capitalize()} {begin_year} and Ending {end_month_name.capitalize()} {end_year} - {period.years} years and {period.months} months")
+    # Display the period using the correct end date
+    st.write(f"**Period:** Beginning {begin_month_name.capitalize()} {begin_year} and Ending {end_month_name.capitalize()} {end_year} - {period.years} years and {period.months} months")
 
-# Filter data between begin_date and end_date, including both
-df_filtered = df[(df['date'] >= begin_date_obj) & (df['date'] <= end_date_obj)]
+    # Filter data between begin_date and end_date, including both
+    df_filtered = df[(df['date'] >= begin_date_obj) & (df['date'] <= end_date_obj)]
 
 # Check if the filtering was successful
 if df_filtered.empty:
@@ -322,6 +439,17 @@ if cagr_cpi is not None:
 else:
     st.write("CAGR for CPI: N/A")
 
+st.subheader("CAGR Values for Real Data")
+if cagr_real_price is not None:
+    st.write(f"CAGR for Real Composite Price Only: {cagr_real_price:.2f}%")
+else:
+    st.write("CAGR for Real Composite Price Only: N/A")
+
+if cagr_real_total_return is not None:
+    st.write(f"Real CAGR for Total Return With Dividends: {cagr_real_total_return:.2f}%")
+else:
+    st.write("Real CAGR for Total Return With Dividends: N/A")
+
 # Extract beginning and ending values for each series from actual data columns
 data_columns = [
     'nominal dividends',
@@ -357,10 +485,40 @@ for col in data_columns:
     factors[col] = factor
 
 # Calculate the ending value based on CAGR and the selected beginning value from the slider
-ending_value_cagr = begin_total_return_value * ((1 + (cagr_nominal_total_return / 100)) ** years_cagr) if cagr_nominal_total_return is not None else None
+if cagr_nominal_total_return is not None:
+    ending_value_cagr = begin_total_return_value * ((1 + (cagr_nominal_total_return / 100)) ** years_cagr)
+else:
+    ending_value_cagr = None
 
 # Calculate the factor increase for Total Return Including Dividends
-factor_total_return = ending_value_cagr / begin_total_return_value if ending_value_cagr is not None else None
+if ending_value_cagr is not None:
+    factor_total_return = ending_value_cagr / begin_total_return_value
+else:
+    factor_total_return = None
+
+# -----------------------------
+# Load and Count Bear Markets
+# -----------------------------
+
+# Calculate the number of bear markets in the selected period
+number_of_bear_markets = count_bear_markets(bear_market_df, begin_date_obj, end_date_obj)
+
+# Extract bear markets within the selected period
+selected_bear_markets_df = bear_market_df[
+    (bear_market_df['start_date'] >= begin_date_obj) &
+    (bear_market_df['start_date'] <= end_date_obj)
+].reset_index(drop=True)
+
+# Prepare the Bear Markets DataFrame
+# Assuming the bear_market_periods.xlsx contains:
+# 'bear market period', 'peak value', 'trough value', 'percentage decline', 'duration (days)'
+
+# If 'percentage decline' is not provided, compute it
+if 'percentage decline' not in selected_bear_markets_df.columns or selected_bear_markets_df['percentage decline'].isnull().all():
+    selected_bear_markets_df['percentage decline'] = ((selected_bear_markets_df['trough value'] - selected_bear_markets_df['peak value']) / selected_bear_markets_df['peak value']) * 100
+
+# Aggregate bear market metrics
+aggregate_bear_metrics = calculate_aggregate_bear_market_metrics(selected_bear_markets_df)
 
 # -----------------------------
 # Selection Widgets for Charts
@@ -532,15 +690,15 @@ nominal_metrics = [
     ('Nominal Earnings', 'nominal earnings'),
     ('Nominal Dividends', 'nominal dividends'),
     ('Composite Price Only', 'composite price only'),
-    ('CPI', 'cpi'),                # 'CPI' moved above 'Total Return'
-    ('Total Return', 'total return')  # 'Total Return' moved below 'CPI'
+    ('CPI', 'cpi'),
+    ('Total Return', 'total return')
 ]
 
 real_metrics = [
     ('Real Earnings', 'real earnings'),
     ('Real Dividends', 'real dividends'),
     ('Real Composite Price Only', 'real composite price only'),
-    ('Real Total Return', 'real total return')  # Added Real Total Return
+    ('Real Total Return', 'real total return')
 ]
 
 # Mapping for is_currency
@@ -548,12 +706,12 @@ metric_is_currency = {
     'Nominal Earnings': True,
     'Nominal Dividends': True,
     'Composite Price Only': False,
-    'Total Return': True,
     'CPI': False,
+    'Total Return': True,
     'Real Earnings': True,
     'Real Dividends': True,
     'Real Composite Price Only': False,
-    'Real Total Return': True  # Assuming Real Total Return is a currency
+    'Real Total Return': True
 }
 
 # Collect nominal metrics
@@ -564,7 +722,8 @@ for display_name, col_name in nominal_metrics:
         end_val = ending_value_cagr if ending_value_cagr is not None else 0
         factor = factor_total_return if factor_total_return is not None else 0
     else:
-        begin_val, end_val = begin_end_values[col_name]
+        begin_val = begin_end_values[col_name][0]
+        end_val = begin_end_values[col_name][1]
         factor = factors[col_name] if factors[col_name] is not None else 0
     metrics_data.append({
         'Metric': display_name,
@@ -572,9 +731,6 @@ for display_name, col_name in nominal_metrics:
         'End Value': end_val,
         'Factor Increase': factor
     })
-
-# Add a blank line for spacing
-metrics_data.append({'Metric': '', 'Begin Value': '', 'End Value': '', 'Factor Increase': ''})
 
 # Collect real metrics
 for display_name, col_name in real_metrics:
@@ -584,7 +740,8 @@ for display_name, col_name in real_metrics:
         end_val = ending_value_cagr_real if ending_value_cagr_real is not None else 0
         factor = factor_real_total_return if factor_real_total_return is not None else 0
     else:
-        begin_val, end_val = begin_end_values[col_name]
+        begin_val = begin_end_values[col_name][0]
+        end_val = begin_end_values[col_name][1]
         factor = factors[col_name] if factors[col_name] is not None else 0
     metrics_data.append({
         'Metric': display_name,
@@ -619,15 +776,15 @@ for i, (metric_name, cagr_value) in enumerate(cagr_metrics):
 metrics_df = pd.DataFrame(metrics_data)
 
 # -----------------------------
-# Format and Display Metrics Table
+# Format and Display Metrics Summary Table
 # -----------------------------
 
-# Function to format values (excluding CAGR)
+# Function to format values (excluding CAGR and Bear Market Count)
 def format_value_no_cagr(value, is_currency):
     if value == '' or pd.isna(value):
         return ''
     if is_currency:
-        return f"${value:,.0f}"  # No decimals for Total Return
+        return f"${value:,.0f}"  # No decimals for begin and end values
     else:
         return f"{value:,.2f}"
 
@@ -651,7 +808,12 @@ for index, row in metrics_df.iterrows():
     if 'CAGR' in metric_name:
         # For CAGR metrics, format as percentage with two decimals
         if pd.notna(begin_value):
-            formatted_begin_value = f"{begin_value:.2f}%"
+            if abs(begin_value) < 1:
+                # Assuming it's a decimal fraction
+                formatted_begin_value = f"{begin_value * 100:.2f}%"
+            else:
+                # Assuming it's already a percentage
+                formatted_begin_value = f"{begin_value:.2f}%"
         else:
             formatted_begin_value = 'N/A'
         # No formatting for End Value and Factor Increase
@@ -662,7 +824,7 @@ for index, row in metrics_df.iterrows():
         if metric_name in ['Total Return', 'Real Total Return']:
             # No decimals, currency formatting
             formatted_begin_value = format_value_no_cagr(begin_value, is_currency)
-            formatted_end_value = format_value_no_cagr(end_val := end_val if 'end_val' in locals() else end_val, is_currency)
+            formatted_end_value = format_value_no_cagr(end_value, is_currency)
         else:
             # Two decimals
             formatted_begin_value = f"{begin_value:,.2f}"
@@ -684,102 +846,256 @@ for index, row in metrics_df.iterrows():
 # Create a DataFrame for display
 formatted_metrics_df = pd.DataFrame(formatted_metrics_data)
 
-# Display the metrics table using st.table to avoid scrolling
+# Display the metrics table using st.table to avoid relying on Styler.hide_index()
 st.subheader("Metrics Summary")
 st.table(formatted_metrics_df)
 
 # -----------------------------
-# Download Button for Metrics
+# Display Detailed Bear Markets Data
 # -----------------------------
 
-# Function to convert DataFrame to Excel with custom formatting
-@st.cache_data
-def convert_df_to_excel(formatted_df, original_df):
+if not selected_bear_markets_df.empty:
+    st.subheader("Detailed Bear Markets Data")
+    
+    # Prepare the Bear Markets DataFrame for display
+    display_bear_markets_df = selected_bear_markets_df[['bear market period', 'peak value', 'trough value', 'percentage decline', 'duration (days)']].copy()
+    display_bear_markets_df.columns = ['Bear Market Period', 'Peak Value', 'Trough Value', 'Percentage Decline', 'Duration (Days)']
+    
+    # Format the columns
+    display_bear_markets_df['Peak Value'] = display_bear_markets_df['Peak Value'].apply(lambda x: f"{x:,.2f}")
+    display_bear_markets_df['Trough Value'] = display_bear_markets_df['Trough Value'].apply(lambda x: f"{x:,.2f}")
+    display_bear_markets_df['Percentage Decline'] = display_bear_markets_df['Percentage Decline'].apply(lambda x: f"{x:.2f}%" if isinstance(x, (float, int)) else x)
+    display_bear_markets_df['Duration (Days)'] = display_bear_markets_df['Duration (Days)'].astype(int)
+    
+    # Display the Bear Markets table
+    st.table(display_bear_markets_df)
+    
+    # -----------------------------
+    # Additional Bear Market Metrics
+    # -----------------------------
+    
+    # Prepare the additional metrics data
+    additional_metrics_data = {
+        'Metric': [
+            'Number of Bear Markets',
+            'Worst Decline Overall (%)',
+            'Average Decline Overall (%)',
+            'Longest Duration (Days)',
+            'Average Duration (Days)'
+        ],
+        'Value': [
+            number_of_bear_markets,
+            f"{aggregate_bear_metrics['Worst Decline Overall (%)']:.2f}%",
+            f"{aggregate_bear_metrics['Average Decline Overall (%)']:.2f}%",
+            int(aggregate_bear_metrics['Longest Duration (Days)']) if aggregate_bear_metrics['Longest Duration (Days)'] is not None else 'N/A',
+            int(aggregate_bear_metrics['Average Duration (Days)']) if aggregate_bear_metrics['Average Duration (Days)'] is not None else 'N/A'
+        ]
+    }
+    
+    # Create a DataFrame for additional metrics
+    additional_metrics_df = pd.DataFrame(additional_metrics_data)
+    
+    # Display the Additional Metrics table
+    st.table(additional_metrics_df)
+    
+else:
+    st.write("No bear markets found within the selected period.")
+
+# -----------------------------
+# Download Button for Metrics and Bear Markets
+# -----------------------------
+
+def convert_df_to_excel(formatted_metrics_df, display_bear_markets_df, additional_metrics_df):
+    """
+    Converts the Metrics Summary and Bear Markets DataFrames to an Excel file with formatting.
+    Returns the Excel file in bytes.
+    """
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        formatted_df.to_excel(writer, index=False, sheet_name='Metrics')
+        # Write Metrics Summary
+        formatted_metrics_df.to_excel(writer, index=False, sheet_name='Metrics Summary')
+
+        # Write Bear Markets Data
+        if not display_bear_markets_df.empty:
+            # Convert formatted percentage declines back to decimal for Excel
+            display_bear_markets_df_excel = display_bear_markets_df.copy()
+            display_bear_markets_df_excel['Percentage Decline'] = display_bear_markets_df_excel['Percentage Decline'].apply(
+                lambda x: float(x.strip('%')) / 100 if isinstance(x, str) and x.endswith('%') else x
+            )
+            display_bear_markets_df_excel.to_excel(writer, index=False, sheet_name='Bear Markets')
+        else:
+            # Create an empty sheet with headers if no bear markets
+            pd.DataFrame(columns=['Bear Market Period', 'Peak Value', 'Trough Value', 'Percentage Decline', 'Duration (Days)']).to_excel(writer, index=False, sheet_name='Bear Markets')
+        
+        # Write Additional Metrics Data
+        if not additional_metrics_df.empty:
+            additional_metrics_df.to_excel(writer, index=False, sheet_name='Additional Metrics')
+        else:
+            # Create an empty sheet with headers if no additional metrics
+            pd.DataFrame(columns=['Metric', 'Value']).to_excel(writer, index=False, sheet_name='Additional Metrics')
 
         workbook = writer.book
-        worksheet = writer.sheets['Metrics']
+        metrics_worksheet = writer.sheets['Metrics Summary']
+        bear_markets_worksheet = writer.sheets['Bear Markets']
+        additional_metrics_worksheet = writer.sheets['Additional Metrics']
 
         # Define formats with center alignment
-        currency_no_decimals_centered_format = workbook.add_format({'num_format': '$#,##0', 'align': 'center'})
-        number_two_decimals_centered_format = workbook.add_format({'num_format': '#,##0.00', 'align': 'center'})
-        percentage_two_decimals_centered_format = workbook.add_format({'num_format': '0.00%', 'align': 'center'})
+        percentage_format = workbook.add_format({'num_format': '0.00%', 'align': 'center'})
+        integer_format = workbook.add_format({'num_format': '0', 'align': 'center'})
+        number_format = workbook.add_format({'num_format': '#,##0.00', 'align': 'center'})  # For Peak and Trough Values
         general_centered_format = workbook.add_format({'align': 'center'})
+        header_format = workbook.add_format({'bold': True, 'align': 'center'})
+        currency_format = workbook.add_format({'num_format': '$#,##0.00', 'align': 'center'})
 
-        # Get the number of rows and columns
-        max_row, max_col = formatted_df.shape
-
-        for row in range(max_row):
-            metric = original_df.at[row, 'Metric']
-            if pd.isna(metric) or metric == '':
-                continue  # Skip formatting for blank lines
-            elif 'CAGR' in metric:
-                # Apply percentage format to Begin Value column (Column B, index 1)
-                cell_value = original_df.at[row, 'Begin Value']
-                if isinstance(cell_value, float) or isinstance(cell_value, int):
-                    # Write as number divided by 100 for percentage formatting
-                    worksheet.write_number(row + 1, 1, cell_value / 100, percentage_two_decimals_centered_format)
+        # Format Metrics Summary Worksheet
+        for row in range(len(formatted_metrics_df)):
+            metric = formatted_metrics_df.at[row, 'Metric']
+            if 'CAGR' in metric:
+                # Apply percentage format to Begin Value (Column B)
+                begin_val = formatted_metrics_df.at[row, 'Begin Value']
+                if isinstance(begin_val, str) and begin_val.endswith('%'):
+                    try:
+                        val = float(begin_val.replace('%', '')) / 100
+                        metrics_worksheet.write_number(row + 1, 1, val, percentage_format)
+                    except:
+                        metrics_worksheet.write(row + 1, 1, begin_val, general_centered_format)
                 else:
-                    # Write as string (e.g., 'N/A')
-                    worksheet.write(row + 1, 1, cell_value, general_centered_format)
+                    metrics_worksheet.write(row + 1, 1, begin_val, general_centered_format)
                 # Leave End Value and Factor Increase empty
-            elif metric in ['Total Return', 'Real Total Return']:
-                # Apply currency format with no decimals to Begin Value and End Value
-                # Begin Value (Column B, index 1)
-                begin_val_str = formatted_df.at[row, 'Begin Value'].replace('$', '').replace(',', '')
-                try:
-                    begin_val_num = float(begin_val_str) if begin_val_str else 0.0
-                except ValueError:
-                    begin_val_num = 0.0  # Default to 0.0 if conversion fails
-                worksheet.write_number(row + 1, 1, begin_val_num, currency_no_decimals_centered_format)
+            elif metric in ['Nominal Earnings', 'Nominal Dividends', 'Composite Price Only', 'CPI', 'Total Return',
+                           'Real Earnings', 'Real Dividends', 'Real Composite Price Only', 'Real Total Return']:
+                # Format Begin Value and End Value
+                begin_val = formatted_metrics_df.at[row, 'Begin Value']
+                end_val = formatted_metrics_df.at[row, 'End Value']
+                factor = formatted_metrics_df.at[row, 'Factor Increase']
 
-                # End Value (Column C, index 2)
-                end_val_str = formatted_df.at[row, 'End Value'].replace('$', '').replace(',', '')
-                try:
-                    end_val_num = float(end_val_str) if end_val_str else 0.0
-                except ValueError:
-                    end_val_num = 0.0  # Default to 0.0 if conversion fails
-                worksheet.write_number(row + 1, 2, end_val_num, currency_no_decimals_centered_format)
-
-                # Factor Increase remains as is (string or number)
-                factor_increase = original_df.at[row, 'Factor Increase']
-                if isinstance(factor_increase, (float, int)):
-                    worksheet.write_number(row + 1, 3, factor_increase, number_two_decimals_centered_format)
+                # Format Begin Value
+                if metric in ['Total Return', 'Real Total Return']:
+                    try:
+                        val = float(begin_val.replace('$', '').replace(',', ''))
+                        metrics_worksheet.write_number(row + 1, 1, val, currency_format)
+                    except:
+                        metrics_worksheet.write(row + 1, 1, begin_val, general_centered_format)
                 else:
-                    worksheet.write(row + 1, 3, factor_increase, general_centered_format)
+                    try:
+                        val = float(begin_val.replace(',', ''))
+                        metrics_worksheet.write_number(row + 1, 1, val, general_centered_format)
+                    except:
+                        metrics_worksheet.write(row + 1, 1, begin_val, general_centered_format)
+
+                # Format End Value
+                if metric in ['Total Return', 'Real Total Return']:
+                    try:
+                        val = float(end_val.replace('$', '').replace(',', ''))
+                        metrics_worksheet.write_number(row + 1, 2, val, currency_format)
+                    except:
+                        metrics_worksheet.write(row + 1, 2, end_val, general_centered_format)
+                else:
+                    try:
+                        val = float(end_val.replace(',', ''))
+                        metrics_worksheet.write_number(row + 1, 2, val, general_centered_format)
+                    except:
+                        metrics_worksheet.write(row + 1, 2, end_val, general_centered_format)
+
+                # Format Factor Increase
+                if metric in ['Total Return', 'Real Total Return']:
+                    try:
+                        metrics_worksheet.write_number(row + 1, 3, float(factor), general_centered_format)
+                    except:
+                        metrics_worksheet.write(row + 1, 3, factor, general_centered_format)
+                else:
+                    try:
+                        metrics_worksheet.write_number(row + 1, 3, float(factor), general_centered_format)
+                    except:
+                        metrics_worksheet.write(row + 1, 3, factor, general_centered_format)
             else:
-                # Apply number format with two decimals to Begin Value and End Value
-                # Begin Value (Column B, index 1)
-                begin_val = original_df.at[row, 'Begin Value']
-                if isinstance(begin_val, (float, int)):
-                    worksheet.write_number(row + 1, 1, begin_val, number_two_decimals_centered_format)
+                # Leave other metrics as is
+                metrics_worksheet.write(row + 1, 0, metric, general_centered_format)
+                metrics_worksheet.write(row + 1, 1, '', general_centered_format)
+                metrics_worksheet.write(row + 1, 2, '', general_centered_format)
+                metrics_worksheet.write(row + 1, 3, '', general_centered_format)
+
+        # Set column widths for Metrics Summary
+        metrics_worksheet.set_column('A:A', 35, general_centered_format)  # Metric
+        metrics_worksheet.set_column('B:B', 20, general_centered_format)  # Begin Value
+        metrics_worksheet.set_column('C:C', 20, general_centered_format)  # End Value
+        metrics_worksheet.set_column('D:D', 18, general_centered_format)  # Factor Increase
+
+        # Format Bear Markets Worksheet
+        if not display_bear_markets_df.empty:
+            # Changed to use number_format instead of currency_format for 'Peak Value' and 'Trough Value'
+            number_format = workbook.add_format({'num_format': '#,##0.00', 'align': 'center'})  # For Peak and Trough Values
+            bear_markets_worksheet.set_column('A:A', 30, general_centered_format)  # Bear Market Period
+            bear_markets_worksheet.set_column('B:B', 15, number_format)  # Peak Value
+            bear_markets_worksheet.set_column('C:C', 15, number_format)  # Trough Value
+            bear_markets_worksheet.set_column('D:D', 20, percentage_format)  # Percentage Decline
+            bear_markets_worksheet.set_column('E:E', 18, integer_format)  # Duration (Days)
+
+            # Apply header formatting
+            header_format = workbook.add_format({'bold': True, 'align': 'center'})
+            for col_num, value in enumerate(display_bear_markets_df.columns.values):
+                bear_markets_worksheet.write(0, col_num, value, header_format)
+        else:
+            # Create headers even if the DataFrame is empty
+            bear_markets_worksheet.write('A1', 'Bear Market Period', header_format)
+            bear_markets_worksheet.write('B1', 'Peak Value', header_format)
+            bear_markets_worksheet.write('C1', 'Trough Value', header_format)
+            bear_markets_worksheet.write('D1', 'Percentage Decline', header_format)
+            bear_markets_worksheet.write('E1', 'Duration (Days)', header_format)
+        
+        # Format Additional Metrics Worksheet
+        if not additional_metrics_df.empty:
+            # Define number formats
+            percentage_format = workbook.add_format({'num_format': '0.00%', 'align': 'center'})
+            integer_format = workbook.add_format({'num_format': '0', 'align': 'center'})
+            number_format = workbook.add_format({'num_format': '#,##0.00', 'align': 'center'})
+            general_centered_format = workbook.add_format({'align': 'center'})
+            header_format = workbook.add_format({'bold': True, 'align': 'center'})
+
+            # Set column widths
+            additional_metrics_worksheet.set_column('A:A', 35, general_centered_format)  # Metric
+            additional_metrics_worksheet.set_column('B:B', 20, general_centered_format)  # Value
+
+            # Apply header formatting
+            additional_metrics_worksheet.write('A1', 'Metric', header_format)
+            additional_metrics_worksheet.write('B1', 'Value', header_format)
+
+            # Apply formatting to data rows
+            for row in range(len(additional_metrics_df)):
+                metric = additional_metrics_df.at[row, 'Metric']
+                value = additional_metrics_df.at[row, 'Value']
+
+                if metric in ['Worst Decline Overall (%)', 'Average Decline Overall (%)']:
+                    if isinstance(value, str) and value.endswith('%'):
+                        try:
+                            val = float(value.replace('%', '')) / 100
+                            additional_metrics_worksheet.write_number(row + 1, 1, val, percentage_format)
+                        except:
+                            additional_metrics_worksheet.write(row + 1, 1, value, general_centered_format)
+                    else:
+                        additional_metrics_worksheet.write(row + 1, 1, value, general_centered_format)
+                elif metric in ['Number of Bear Markets', 'Longest Duration (Days)', 'Average Duration (Days)']:
+                    if isinstance(value, (int, float)):
+                        additional_metrics_worksheet.write_number(row + 1, 1, int(value), integer_format)
+                    else:
+                        additional_metrics_worksheet.write(row + 1, 1, value, general_centered_format)
                 else:
-                    worksheet.write(row + 1, 1, begin_val, general_centered_format)
+                    # Default to general format
+                    if isinstance(value, (int, float)):
+                        additional_metrics_worksheet.write_number(row + 1, 1, value, number_format)
+                    else:
+                        additional_metrics_worksheet.write(row + 1, 1, value, general_centered_format)
+        else:
+            # Create headers even if the DataFrame is empty
+            additional_metrics_worksheet.write('A1', 'Metric', header_format)
+            additional_metrics_worksheet.write('B1', 'Value', header_format)
 
-                # End Value (Column C, index 2)
-                end_val = original_df.at[row, 'End Value']
-                if isinstance(end_val, (float, int)):
-                    worksheet.write_number(row + 1, 2, end_val, number_two_decimals_centered_format)
-                else:
-                    worksheet.write(row + 1, 2, end_val, general_centered_format)
+    # -----------------------------
+    # Prepare the DataFrame to display
+    # -----------------------------
 
-                # Factor Increase (Column D, index 3)
-                factor_increase = original_df.at[row, 'Factor Increase']
-                if isinstance(factor_increase, (float, int)):
-                    worksheet.write_number(row + 1, 3, factor_increase, number_two_decimals_centered_format)
-                else:
-                    worksheet.write(row + 1, 3, factor_increase, general_centered_format)
-
-        # Adjust column widths for better readability
-        worksheet.set_column('A:A', 35, general_centered_format)  # Metric
-        worksheet.set_column('B:B', 20, general_centered_format)  # Begin Value
-        worksheet.set_column('C:C', 20, general_centered_format)  # End Value
-        worksheet.set_column('D:D', 18, general_centered_format)  # Factor Increase
-
-    # Convert the metrics DataFrame to Excel with formatting
-    excel_data = convert_df_to_excel(formatted_metrics_df, metrics_df)
+    # Convert to Excel and prepare for download
+    excel_data = convert_df_to_excel(formatted_metrics_df, display_bear_markets_df, additional_metrics_df)
 
     # Provide a download button
     st.download_button(
@@ -788,5 +1104,13 @@ def convert_df_to_excel(formatted_df, original_df):
         file_name='metrics_summary.xlsx',
         mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
-    
-    st.write("Data used is from the Robert Shiller Data website: https://shillerdata.com/ and the file used is ie_data.xls")
+
+# -----------------------------
+# Data Source Information
+# -----------------------------
+
+st.markdown("""
+**Data Sources:**
+- **S&P 500 Data:** From the Robert Shiller Data website: [https://shillerdata.com/](https://shillerdata.com/) and the file used is `data.xlsx`.
+- **Bear Market Data:** From the file `bear_market_periods.xlsx`.
+""")
