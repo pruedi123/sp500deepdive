@@ -226,11 +226,11 @@ st.sidebar.header("Configuration")
 
 # Load your local Excel files
 df = load_data('data.xlsx')
-bear_market_df = load_bear_market_data('bear_market_periods.xlsx')
+bear_market_df = load_bear_market_data('bear_market_periods_2.xlsx')
 
 # Verify that bear_market_df is not empty
 if bear_market_df.empty:
-    st.error("Bear market data could not be loaded. Please check the 'bear_market_periods.xlsx' file.")
+    st.error("Bear market data could not be loaded. Please check the 'bear_market_periods_2.xlsx' file.")
     st.stop()
 
 # Define the last valid date based on the availability of data
@@ -510,7 +510,7 @@ selected_bear_markets_df = bear_market_df[
 ].reset_index(drop=True)
 
 # Prepare the Bear Markets DataFrame
-# Assuming the bear_market_periods.xlsx contains:
+# Assuming the bear_market_periods_2.xlsx contains:
 # 'bear market period', 'peak value', 'trough value', 'percentage decline', 'duration (days)'
 
 # If 'percentage decline' is not provided, compute it
@@ -1112,5 +1112,5 @@ def convert_df_to_excel(formatted_metrics_df, display_bear_markets_df, additiona
 st.markdown("""
 **Data Sources:**
 - **S&P 500 Data:** From the Robert Shiller Data website: [https://shillerdata.com/](https://shillerdata.com/) and the file used is `data.xlsx`.
-- **Bear Market Data:** From the file `bear_market_periods.xlsx`.
+- **Bear Market Data:** From the file `bear_market_periods_2.xlsx`.
 """)
